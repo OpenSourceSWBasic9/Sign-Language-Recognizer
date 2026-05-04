@@ -1,0 +1,19 @@
+# 데이터 파일 제외 (가장 중요)
+*.json
+Train/
+Test/
+
+# 파이토치 모델 체크포인트 제외
+*.pth
+*.pkl
+
+# 파이썬 캐시 및 가상환경
+*.pyc
+__pycache__/
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# 대용량 압축 파일
+*.zip
+*.tar.gz
