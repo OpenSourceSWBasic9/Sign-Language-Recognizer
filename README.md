@@ -27,12 +27,9 @@
 
 ## 2. 모델 학습 코드 실행
 ### 데이터 다운로드
-* [한국어 수어 데이터](https://aihub.or.kr/aihubdata/data/view.do?currMenu=115&topMenu=100&aihubDataSe=data&dataSetSn=103)
-* 가입 후, 파일 목록 들어가서 다운로드 버튼 클릭하여 데이터 신청 후 다운로드 가능 (리눅스 환경 권장)
-* `find '[폴더경로]' -name [파일명.zip.part*] -print0 | sort -zt'.' -k2V | xargs -0 cat > [파일명.zip]`
-* 압축파일 용량이 크기 때문에 분할되어 있음 → 하나로 합친 후 압축 해제
-* `unzip [파일명.zip]`
-* unzip 설치 안 되어 있으면 설치할 것. unzip 설치 명령어 `sudo apt update && sudo apt install unzip`
+* [한국어 수어 데이터](https://drive.google.com/file/d/1ooQm75JyEElfrCKla5dZ9BUya9By7gN9/view?usp=drive_link)
+* 현실 영상 기반 좌표 데이터, 가상 영상 기반 좌표 데이터, 정답 데이터
+* AIHub의 한국어 수어 데이터 중 WORD0001부터 WORD0550까지의 범위에서 무작위로 100개 선별
 
 ### 주피터 노트북 실행
 * `jupyter notebook`
