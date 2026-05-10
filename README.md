@@ -27,9 +27,7 @@
 
 ## 2. 모델 학습 코드 실행
 ### 데이터 다운로드
-* [한국어 수어 데이터](https://drive.google.com/file/d/1ooQm75JyEElfrCKla5dZ9BUya9By7gN9/view?usp=drive_link)
-* 현실 영상 기반 좌표 데이터, 가상 영상 기반 좌표 데이터, 정답 데이터
-* AIHub의 한국어 수어 데이터 중 WORD0001부터 WORD0550까지의 범위에서 무작위로 100개 선별
+* (26/05/10) 데이터 파일의 크기가 13.6GB까지 증가함에 따라 공유 링크 삭제
 
 ### 주피터 노트북 실행
 * `jupyter notebook`
