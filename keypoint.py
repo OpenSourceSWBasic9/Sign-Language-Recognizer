@@ -14,6 +14,9 @@ THRESHOLD = 0.85
 frame_buffer = deque([[0.0] * feature_dim] * MAX_FRAME, maxlen=MAX_FRAME)
 word_sequence_queue = []
 
+hand_visible_counter = 0
+MIN_REQUIRED_FRAMES = 30
+
 # 한글 폰트
 try:
     font = ImageFont.truetype("malgun.ttf", 30)
@@ -159,25 +162,34 @@ while cap.isOpened():
     frame_keypoints[y_indices] = (frame_keypoints[y_indices] - ref_y)
     frame_keypoints = frame_keypoints.tolist()
 
-    frame_buffer.append(frame_keypoints)
+    is_hand_detected = results_hands.multi_hand_landmarks is not None
 
-    input_window = np.array([frame_buffer], dtype=np.float32)
-    input_tensor = torch.tensor(input_window, dtype=torch.float32).to(device)
+    if not is_hand_detected:
+        frame_buffer = deque([[0.0] * feature_dim] * MAX_FRAME, maxlen=MAX_FRAME)
+    else:
+        hand_visible_counter += 1
 
-    with torch.no_grad():
-        outputs = model(input_tensor)
-        prob = torch.softmax(outputs, dim=1).cpu().numpy()[0]
-    
-    predict = np.argmax(prob)
-    conf = prob[predict]
+        frame_buffer.append(frame_keypoints)
 
-    if conf > THRESHOLD:
-        detected_word = idx_to_word[predict]
+        if hand_visible_counter > MIN_REQUIRED_FRAMES:
+            input_window = np.array([frame_buffer], dtype=np.float32)
+            input_tensor = torch.tensor(input_window, dtype=torch.float32).to(device)
 
-        if not word_sequence_queue or word_sequence_queue[-1] != detected_word:
-            word_sequence_queue.append(detected_word)
-            print(f"인식 단어: {detected_word} (확률: {conf*100:.1f}%)")
-            frame_buffer = deque([[0.0] * feature_dim] * MAX_FRAME, maxlen=MAX_FRAME)
+            with torch.no_grad():
+                outputs = model(input_tensor)
+                prob = torch.softmax(outputs, dim=1).cpu().numpy()[0]
+            
+            predict = np.argmax(prob)
+            conf = prob[predict]
+
+            if conf > THRESHOLD:
+                detected_word = idx_to_word[predict]
+
+                if not word_sequence_queue or word_sequence_queue[-1] != detected_word:
+                    word_sequence_queue.append(detected_word)
+                    print(f"인식 단어: {detected_word} (확률: {conf*100:.1f}%)")
+                    frame_buffer = deque([[0.0] * feature_dim] * MAX_FRAME, maxlen=MAX_FRAME)
+                    hand_visible_counter = 0
 
     if word_sequence_queue:
         img_pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
