@@ -6,7 +6,7 @@ Test/
 # 파이토치 모델 체크포인트 제외
 *.pth
 *.pkl
-!sign_language_model_v2.pth
+!sign_language_model_*.pth
 
 # 파이썬 캐시 및 가상환경
 *.pyc
