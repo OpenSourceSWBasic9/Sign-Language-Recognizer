@@ -6,6 +6,15 @@ import torch
 import torch.nn as nn
 from collections import deque
 from PIL import ImageFont, ImageDraw, Image
+import sys
+import functools
+import os
+from openai import OpenAI
+import threading
+
+print = functools.partial(print, flush=True)
+
+sys.stdout.reconfigure(encoding='utf-8')
 
 feature_dim = 135
 MAX_FRAME = 175
@@ -19,6 +28,9 @@ MIN_REQUIRED_FRAMES = 30
 
 prev_time = 0.0
 waiting_time = 0.0
+
+refined_sentence = ""         # API가 다듬은 최종 문장
+is_refining = False           # API 호출 중 여부 (중복 호출 방지)
 
 # 한글 폰트
 try:
@@ -77,6 +89,36 @@ class SignLanguageClassifier(nn.Module):
 model = SignLanguageClassifier(feature_dim, hidden_size, output_dim, num_layers).to(device)
 model.load_state_dict(checkpoint['model_state_dict'])
 model.eval()
+
+def refine_sentence(words):
+    global refined_sentence, is_refining
+    try:
+        client = OpenAI(
+            api_key="",
+            base_url="https://api.groq.com/openai/v1"
+        )
+        word_str = " ".join(words)
+        response = client.chat.completions.create(
+            model="llama-3.1-8b-instant",  # 빠른 모델 추천
+            max_tokens=256,
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"다음은 한국어 수어 인식 시스템이 순서대로 감지한 단어들이야: [{word_str}]\n"
+                        "이 단어들을 자연스러운 한국어 문장 하나로 다듬어줘. "
+                        "단어의 순서와 의미를 최대한 유지하고, 문장 외에 다른 설명은 하지 마."
+                    )
+                }
+            ]
+        )
+        refined_sentence = response.choices[0].message.content.strip()
+        print(f"다듬어진 문장: {refined_sentence}", flush=True)
+    except Exception as e:
+        print(f"API 오류: {e}", flush=True)
+        refined_sentence = " ".join(words)
+    finally:
+        is_refining = False
 
 # 웹캠 캡처
 cap = cv2.VideoCapture(0)
@@ -189,9 +231,12 @@ while cap.isOpened():
                 prob = torch.softmax(outputs, dim=1).cpu().numpy()[0]
             
             predict = np.argmax(prob)
-            conf = prob[predict]
+            conf = prob[predict]            
 
             if conf > THRESHOLD:
+                top3 = np.argsort(prob)[::-1][:5]
+                for idx in top3:
+                    print(f"{idx_to_word[idx]}: {prob[idx]*100:.1f}%")
                 detected_word = idx_to_word[predict]
 
                 if not word_sequence_queue or word_sequence_queue[-1] != detected_word:
@@ -200,11 +245,21 @@ while cap.isOpened():
                     frame_buffer = deque([[0.0] * feature_dim] * MAX_FRAME, maxlen=MAX_FRAME)
                     hand_visible_counter = 0
 
+                    # 새 단어가 추가될 때마다 백그라운드에서 문장 다듬기 호출
+                    if not is_refining:
+                        is_refining = True
+                        refined_sentence = "문장 생성 중..."
+                        t = threading.Thread(target=refine_sentence, args=(list(word_sequence_queue),), daemon=True)
+                        t.start()
+
     if word_sequence_queue:
         img_pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         draw = ImageDraw.Draw(img_pil)
         sentence_text = f"인식된 문장: {' '.join(word_sequence_queue)}"
         draw.text((30, 50), sentence_text, font=font, fill=(255, 0, 0))
+
+        if refined_sentence:
+            draw.text((30, 90), f"문장: {refined_sentence}", font=font, fill=(255, 0, 0))
         frame = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
 
     prev_time = cur_time
