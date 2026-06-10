@@ -121,8 +121,43 @@ def refine_sentence(words):
                 }
             ]
         )
-        refined_sentence = response.choices[0].message.content.strip()
-        print(f"다듬어진 문장: {refined_sentence}", flush=True)
+        first_sentence = response.choices[0].message.content.strip()
+        print(f"1차 문장: {first_sentence}", flush=True)
+
+        review_prompt = f"""
+다음은 수어 인식 모델이 예측한 단어 목록과,
+그 단어 목록을 바탕으로 만들어진 한국어 문장이야.
+
+단어 목록:
+{word_str}
+
+생성된 문장:
+{first_sentence}
+
+위 문장을 단어 목록의 의미에 맞게 다시 한 번 자연스럽게 다듬어 줘.
+
+조건:
+- 입력된 단어의 의미를 최대한 유지해.
+- 입력 단어와 크게 관련 없는 내용은 제거해 줘.
+- 문장이 너무 길거나 어색하면 짧고 단순하게 만들어 줘.
+- 설명 없이 문장만 출력해.
+"""
+
+        review_response = client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                max_tokens=150,
+                temperature=0.2,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": review_prompt
+                    }
+                ]
+            )
+
+        refined_sentence = review_response.choices[0].message.content.strip()
+        print(f"최종 문장: {refined_sentence}", flush=True)
+
     except Exception as e:
         print(f"API 오류: {e}", flush=True)
         refined_sentence = " ".join(words)
