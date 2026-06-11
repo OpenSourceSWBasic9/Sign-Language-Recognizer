@@ -94,7 +94,7 @@ def refine_sentence(words):
     global refined_sentence, is_refining
     try:
         client = OpenAI(
-            api_key="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",
+            api_key="",
             base_url="https://api.groq.com/openai/v1"
         )
         word_str = " ".join(words)
