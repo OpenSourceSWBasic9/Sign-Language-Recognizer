@@ -94,7 +94,7 @@ def refine_sentence(words):
     global refined_sentence, is_refining
     try:
         client = OpenAI(
-            api_key=" ",
+            api_key="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",
             base_url="https://api.groq.com/openai/v1"
         )
         word_str = " ".join(words)
@@ -124,7 +124,10 @@ def refine_sentence(words):
         first_sentence = response.choices[0].message.content.strip()
         print(f"1차 문장: {first_sentence}", flush=True)
 
-        review_prompt = f"""
+        need_review = len(words) <= 2 or len(first_sentence) > max(40, len(word_str) * 3)
+
+        if need_review:
+            review_prompt = f"""
 다음은 수어 인식 모델이 예측한 단어 목록과,
 그 단어 목록을 바탕으로 만들어진 한국어 문장이야.
 
@@ -134,7 +137,8 @@ def refine_sentence(words):
 생성된 문장:
 {first_sentence}
 
-위 문장을 단어 목록의 의미에 맞게 다시 한 번 자연스럽게 다듬어 줘.
+위 문장은 입력 단어가 부족하거나, 입력 단어에 비해 문장이 길어서 의미가 과하게 확장되었을 수 있어.
+단어 목록의 의미를 기준으로 다시 한 번 짧고 자연스럽게 다듬어 줘.
 
 조건:
 - 입력된 단어의 의미를 최대한 유지해.
@@ -143,9 +147,9 @@ def refine_sentence(words):
 - 설명 없이 문장만 출력해.
 """
 
-        review_response = client.chat.completions.create(
+            review_response = client.chat.completions.create(
                 model="llama-3.1-8b-instant",
-                max_tokens=150,
+                max_tokens=100,
                 temperature=0.2,
                 messages=[
                     {
@@ -155,9 +159,13 @@ def refine_sentence(words):
                 ]
             )
 
-        refined_sentence = review_response.choices[0].message.content.strip()
-        print(f"최종 문장: {refined_sentence}", flush=True)
+            refined_sentence = review_response.choices[0].message.content.strip()
+            print(f"2차 검수 실행: {refined_sentence}", flush=True)
 
+        else:
+            refined_sentence = first_sentence
+            print(f"2차 검수 생략: {refined_sentence}", flush=True)
+  
     except Exception as e:
         print(f"API 오류: {e}", flush=True)
         refined_sentence = " ".join(words)
