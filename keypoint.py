@@ -102,19 +102,71 @@ def refine_sentence(words):
         response = client.chat.completions.create(
             model="llama-3.1-8b-instant",  # 빠른 모델 추천
             max_tokens=256,
+	    temperature=0.2,
             messages=[
                 {
                     "role": "user",
                     "content": (
                         f"다음은 한국어 수어 인식 시스템이 순서대로 감지한 단어들이야: [{word_str}]\n"
-                        "이 단어들을 자연스러운 한국어 문장 하나로 다듬어줘. "
-                        "단어의 순서와 의미를 최대한 유지하고, 문장 외에 다른 설명은 하지 마."
+                        "이 단어들을 자연스러운 한국어 문장 하나로 다듬는 역할만 해. \n"
+                        "반드시 아래 규칙을 지켜.\n"
+			"1. 입력 단어에 없는 새로운 명사, 동사, 장소, 시간, 감정, 상황을 추가하지 마.\n"
+			"2. 입력 단어의 의미를 바꾸지 마.\n"
+			"3. 입력 단어의 순서를 최대한 유지해.\n"
+			"4. 자연스러운 문장을 위해 조사와 어미만 최소한으로 추가해.\n"
+			"5. 단어들이 서로 연결되지 않으면 억지로 긴 문장을 만들지 말고 짧게 정리해.\n"
+			"6. 입력 단어가 너무 적거나 의미가 불명확하면 '인식 결과가 불명확합니다.' 라고 출력해.\n"
+			"7. 출력은 한국어 문장 하나만 작성해.\n"
+			"8. 문장 외에 설명, 해설, 이유, 예시는 출력하지 마.\n"
                     )
                 }
             ]
         )
-        refined_sentence = response.choices[0].message.content.strip()
-        print(f"다듬어진 문장: {refined_sentence}", flush=True)
+        first_sentence = response.choices[0].message.content.strip()
+        print(f"1차 문장: {first_sentence}", flush=True)
+
+        need_review = len(words) <= 2 or len(first_sentence) > max(40, len(word_str) * 3)
+
+        if need_review:
+            review_prompt = f"""
+다음은 수어 인식 모델이 예측한 단어 목록과,
+그 단어 목록을 바탕으로 만들어진 한국어 문장이야.
+
+단어 목록:
+{word_str}
+
+생성된 문장:
+{first_sentence}
+
+위 문장은 입력 단어가 부족하거나, 입력 단어에 비해 문장이 길어서 의미가 과하게 확장되었을 수 있어.
+단어 목록의 의미를 기준으로 다시 한 번 짧고 자연스럽게 다듬어 줘.
+
+조건:
+- 입력된 단어의 의미를 최대한 유지해.
+- 입력 단어와 크게 관련 없는 내용은 제거해 줘.
+- 문장이 너무 길거나 어색하면 짧고 단순하게 만들어 줘.
+- 설명 없이 문장만 출력해.
+"""
+
+            review_response = client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                max_tokens=100,
+                temperature=0.2,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": review_prompt
+                    }
+                ]
+            )
+
+            refined_sentence = review_response.choices[0].message.content.strip()
+            print(f"2차 검수 실행: {refined_sentence}", flush=True)
+
+        else:
+            refined_sentence = first_sentence
+            print(f"2차 검수 생략: {refined_sentence}", flush=True)
+  
     except Exception as e:
         print(f"API 오류: {e}", flush=True)
         refined_sentence = " ".join(words)
