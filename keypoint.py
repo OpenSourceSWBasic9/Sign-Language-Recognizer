@@ -18,7 +18,8 @@ sys.stdout.reconfigure(encoding='utf-8')
 
 feature_dim = 135
 MAX_FRAME = 175
-THRESHOLD = 0.85
+THRESHOLD = 0.8
+TARGET_SHOULDER_DIST = 0.18
 
 frame_buffer = deque([[0.0] * feature_dim] * MAX_FRAME, maxlen=MAX_FRAME)
 word_sequence_queue = []
@@ -211,22 +212,20 @@ while cap.isOpened():
             
             if hand_label == "Left":
                 left_hand_data = temp_coords
+                hand_color = (0,255,0)
             else:
                 right_hand_data = temp_coords
+                hand_color = (0,0,255)
 
             mp_drawing.draw_landmarks(
                 frame,
                 hand_landmarks,
                 mp_hands.HAND_CONNECTIONS,
-                mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=4),
+                mp_drawing.DrawingSpec(color=hand_color, thickness=2, circle_radius=4),
                 mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=2)
             )
-
+    
     frame_keypoints = left_hand_data + right_hand_data
-    while len(frame_keypoints) < 126:
-        frame_keypoints.append(0)
-
-    frame_keypoints = frame_keypoints[:126]
 
     # 코, 양쪽 어깨 좌표 추출
     extra_features = []
@@ -247,16 +246,23 @@ while cap.isOpened():
     else:
         extra_features = [0, 0, 1, 0, 0, 1, 0, 0, 1]
 
+
     frame_keypoints = frame_keypoints + extra_features
 
     # 코 좌표 기준 상대 좌표 계산
     ref_x, ref_y = extra_features[0], extra_features[1]
 
-    x_indices = list(range(0, feature_dim, 3))
-    y_indices = list(range(1, feature_dim, 3))
-    frame_keypoints = np.array(frame_keypoints, dtype=np.float32)
-    frame_keypoints[x_indices] = (frame_keypoints[x_indices] - ref_x)
-    frame_keypoints[y_indices] = (frame_keypoints[y_indices] - ref_y)
+    if ref_x != 0 and ref_y != 0:
+        x_indices = list(range(0, feature_dim, 3))
+        y_indices = list(range(1, feature_dim, 3))
+        frame_keypoints = np.array(frame_keypoints, dtype=np.float32)
+        frame_keypoints[x_indices] = (frame_keypoints[x_indices] - ref_x)
+        frame_keypoints[y_indices] = (frame_keypoints[y_indices] - ref_y)
+
+    cur_shoulder_dist = np.sqrt((left_shoulder.x - right_shoulder.x)**2 + (left_shoulder.y - right_shoulder.y)**2)
+    scale_factor = cur_shoulder_dist / TARGET_SHOULDER_DIST
+    frame_keypoints[:126] = frame_keypoints[:126] / scale_factor
+
     frame_keypoints = frame_keypoints.tolist()
 
     cur_time = time.time()
@@ -264,45 +270,50 @@ while cap.isOpened():
     is_hand_detected = results_hands.multi_hand_landmarks is not None
 
     if not is_hand_detected:
-        frame_buffer = deque([[0.0] * feature_dim] * MAX_FRAME, maxlen=MAX_FRAME)
+        frame_buffer.append([0.0] * feature_dim)
         waiting_time += delta_time
         if waiting_time >= 3.0:
             word_sequence_queue = []
     else:
+        print(f"코 좌표: {ref_x:.4f}, {ref_y:.4f}")
+        print(f"정규화 후 손목(왼손 index 0,1): {frame_keypoints[0]:.4f}, {frame_keypoints[1]:.4f}")
+        print(f"정규화 후 손목(오른손 index 63,64): {frame_keypoints[63]:.4f}, {frame_keypoints[64]:.4f}")
         waiting_time = 0.0
-        hand_visible_counter += 1
-
+        
         frame_buffer.append(frame_keypoints)
 
-        if hand_visible_counter > MIN_REQUIRED_FRAMES:
-            input_window = np.array([frame_buffer], dtype=np.float32)
-            input_tensor = torch.tensor(input_window, dtype=torch.float32).to(device)
+    current_buffer = np.array(frame_buffer, dtype=np.float32)
+    hand_detected_per_frame = np.sum(np.abs(current_buffer[:, :126]), axis=1) > 0
+    actual_hand_frames = np.sum(hand_detected_per_frame)
 
-            with torch.no_grad():
-                outputs = model(input_tensor)
-                prob = torch.softmax(outputs, dim=1).cpu().numpy()[0]
-            
-            predict = np.argmax(prob)
-            conf = prob[predict]            
+    if actual_hand_frames > MIN_REQUIRED_FRAMES:
+        input_window = np.array([frame_buffer], dtype=np.float32)
+        input_tensor = torch.tensor(input_window, dtype=torch.float32).to(device)
 
-            if conf > THRESHOLD:
-                top3 = np.argsort(prob)[::-1][:5]
-                for idx in top3:
-                    print(f"{idx_to_word[idx]}: {prob[idx]*100:.1f}%")
-                detected_word = idx_to_word[predict]
+        with torch.no_grad():
+            outputs = model(input_tensor)
+            prob = torch.softmax(outputs, dim=1).cpu().numpy()[0]
+        
+        predict = np.argmax(prob)
+        conf = prob[predict]            
 
-                if not word_sequence_queue or word_sequence_queue[-1] != detected_word:
-                    word_sequence_queue.append(detected_word)
-                    print(f"인식 단어: {detected_word} (확률: {conf*100:.1f}%)")
-                    frame_buffer = deque([[0.0] * feature_dim] * MAX_FRAME, maxlen=MAX_FRAME)
-                    hand_visible_counter = 0
+        if conf > THRESHOLD:
+            top3 = np.argsort(prob)[::-1][:5]
+            for idx in top3:
+                print(f"{idx_to_word[idx]}: {prob[idx]*100:.1f}%")
+            detected_word = idx_to_word[predict]
 
-                    # 새 단어가 추가될 때마다 백그라운드에서 문장 다듬기 호출
-                    if not is_refining:
-                        is_refining = True
-                        refined_sentence = "문장 생성 중..."
-                        t = threading.Thread(target=refine_sentence, args=(list(word_sequence_queue),), daemon=True)
-                        t.start()
+            if not word_sequence_queue or word_sequence_queue[-1] != detected_word:
+                word_sequence_queue.append(detected_word)
+                frame_buffer = deque([[0.0] * feature_dim] * MAX_FRAME, maxlen=MAX_FRAME)       
+                print(f"인식 단어: {detected_word} (확률: {conf*100:.1f}%)")
+
+                # 새 단어가 추가될 때마다 백그라운드에서 문장 다듬기 호출
+                if not is_refining:
+                    is_refining = True
+                    refined_sentence = "문장 생성 중..."
+                    t = threading.Thread(target=refine_sentence, args=(list(word_sequence_queue),), daemon=True)
+                    t.start()
 
     if word_sequence_queue:
         img_pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
