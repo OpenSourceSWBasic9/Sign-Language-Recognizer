@@ -18,7 +18,8 @@ sys.stdout.reconfigure(encoding='utf-8')
 
 feature_dim = 135
 MAX_FRAME = 175
-THRESHOLD = 0.85
+THRESHOLD = 0.8
+TARGET_SHOULDER_DIST = 0.18
 
 frame_buffer = deque([[0.0] * feature_dim] * MAX_FRAME, maxlen=MAX_FRAME)
 word_sequence_queue = []
@@ -82,7 +83,7 @@ class SignLanguageClassifier(nn.Module):
         avg_pool = torch.mean(out, dim=1)
         max_pool, _ = torch.max(out, dim=1)
 
-        combined = torch.cat((max_pool, max_pool), dim=1)
+        combined = torch.cat((avg_pool, max_pool), dim=1)
 
         return self.fc(combined)
 
@@ -139,6 +140,7 @@ while cap.isOpened():
         print("카메라 화면을 불러올 수 없습니다.")
         break
 
+    frame = cv2.flip(frame, 1)
     img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
     results_hands = hands.process(img_rgb)
@@ -158,14 +160,16 @@ while cap.isOpened():
             
             if hand_label == "Left":
                 left_hand_data = temp_coords
+                hand_color = (0,255,0)
             else:
                 right_hand_data = temp_coords
+                hand_color = (0,0,255)
 
             mp_drawing.draw_landmarks(
                 frame,
                 hand_landmarks,
                 mp_hands.HAND_CONNECTIONS,
-                mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=4),
+                mp_drawing.DrawingSpec(color=hand_color, thickness=2, circle_radius=4),
                 mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=2)
             )
     
@@ -190,18 +194,23 @@ while cap.isOpened():
     else:
         extra_features = [0, 0, 1, 0, 0, 1, 0, 0, 1]
 
-    frame = cv2.flip(frame, 1)
 
     frame_keypoints = frame_keypoints + extra_features
 
     # 코 좌표 기준 상대 좌표 계산
     ref_x, ref_y = extra_features[0], extra_features[1]
 
-    x_indices = list(range(0, feature_dim, 3))
-    y_indices = list(range(1, feature_dim, 3))
-    frame_keypoints = np.array(frame_keypoints, dtype=np.float32)
-    frame_keypoints[x_indices] = (frame_keypoints[x_indices] - ref_x)
-    frame_keypoints[y_indices] = (frame_keypoints[y_indices] - ref_y)
+    if ref_x != 0 and ref_y != 0:
+        x_indices = list(range(0, feature_dim, 3))
+        y_indices = list(range(1, feature_dim, 3))
+        frame_keypoints = np.array(frame_keypoints, dtype=np.float32)
+        frame_keypoints[x_indices] = (frame_keypoints[x_indices] - ref_x)
+        frame_keypoints[y_indices] = (frame_keypoints[y_indices] - ref_y)
+
+    cur_shoulder_dist = np.sqrt((left_shoulder.x - right_shoulder.x)**2 + (left_shoulder.y - right_shoulder.y)**2)
+    scale_factor = cur_shoulder_dist / TARGET_SHOULDER_DIST
+    frame_keypoints[:126] = frame_keypoints[:126] / scale_factor
+
     frame_keypoints = frame_keypoints.tolist()
 
     cur_time = time.time()
@@ -214,6 +223,9 @@ while cap.isOpened():
         if waiting_time >= 3.0:
             word_sequence_queue = []
     else:
+        print(f"코 좌표: {ref_x:.4f}, {ref_y:.4f}")
+        print(f"정규화 후 손목(왼손 index 0,1): {frame_keypoints[0]:.4f}, {frame_keypoints[1]:.4f}")
+        print(f"정규화 후 손목(오른손 index 63,64): {frame_keypoints[63]:.4f}, {frame_keypoints[64]:.4f}")
         waiting_time = 0.0
         
         frame_buffer.append(frame_keypoints)
@@ -221,7 +233,6 @@ while cap.isOpened():
     current_buffer = np.array(frame_buffer, dtype=np.float32)
     hand_detected_per_frame = np.sum(np.abs(current_buffer[:, :126]), axis=1) > 0
     actual_hand_frames = np.sum(hand_detected_per_frame)
-    print(f"현재 윈도우 내부: 진짜 손이 인식된 프레임은 총 {actual_hand_frames}개 / 175개")
 
     if actual_hand_frames > MIN_REQUIRED_FRAMES:
         input_window = np.array([frame_buffer], dtype=np.float32)
@@ -242,6 +253,7 @@ while cap.isOpened():
 
             if not word_sequence_queue or word_sequence_queue[-1] != detected_word:
                 word_sequence_queue.append(detected_word)
+                frame_buffer = deque([[0.0] * feature_dim] * MAX_FRAME, maxlen=MAX_FRAME)       
                 print(f"인식 단어: {detected_word} (확률: {conf*100:.1f}%)")
 
                 # 새 단어가 추가될 때마다 백그라운드에서 문장 다듬기 호출
