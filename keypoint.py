@@ -82,7 +82,7 @@ class SignLanguageClassifier(nn.Module):
         avg_pool = torch.mean(out, dim=1)
         max_pool, _ = torch.max(out, dim=1)
 
-        combined = torch.cat((avg_pool, max_pool), dim=1)
+        combined = torch.cat((max_pool, max_pool), dim=1)
 
         return self.fc(combined)
 
@@ -139,7 +139,6 @@ while cap.isOpened():
         print("카메라 화면을 불러올 수 없습니다.")
         break
 
-    frame = cv2.flip(frame, 1)
     img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
     results_hands = hands.process(img_rgb)
@@ -169,12 +168,8 @@ while cap.isOpened():
                 mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=4),
                 mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=2)
             )
-
+    
     frame_keypoints = left_hand_data + right_hand_data
-    while len(frame_keypoints) < 126:
-        frame_keypoints.append(0)
-
-    frame_keypoints = frame_keypoints[:126]
 
     # 코, 양쪽 어깨 좌표 추출
     extra_features = []
@@ -195,6 +190,8 @@ while cap.isOpened():
     else:
         extra_features = [0, 0, 1, 0, 0, 1, 0, 0, 1]
 
+    frame = cv2.flip(frame, 1)
+
     frame_keypoints = frame_keypoints + extra_features
 
     # 코 좌표 기준 상대 좌표 계산
@@ -212,45 +209,47 @@ while cap.isOpened():
     is_hand_detected = results_hands.multi_hand_landmarks is not None
 
     if not is_hand_detected:
-        frame_buffer = deque([[0.0] * feature_dim] * MAX_FRAME, maxlen=MAX_FRAME)
+        frame_buffer.append([0.0] * feature_dim)
         waiting_time += delta_time
         if waiting_time >= 3.0:
             word_sequence_queue = []
     else:
         waiting_time = 0.0
-        hand_visible_counter += 1
-
+        
         frame_buffer.append(frame_keypoints)
 
-        if hand_visible_counter > MIN_REQUIRED_FRAMES:
-            input_window = np.array([frame_buffer], dtype=np.float32)
-            input_tensor = torch.tensor(input_window, dtype=torch.float32).to(device)
+    current_buffer = np.array(frame_buffer, dtype=np.float32)
+    hand_detected_per_frame = np.sum(np.abs(current_buffer[:, :126]), axis=1) > 0
+    actual_hand_frames = np.sum(hand_detected_per_frame)
+    print(f"현재 윈도우 내부: 진짜 손이 인식된 프레임은 총 {actual_hand_frames}개 / 175개")
 
-            with torch.no_grad():
-                outputs = model(input_tensor)
-                prob = torch.softmax(outputs, dim=1).cpu().numpy()[0]
-            
-            predict = np.argmax(prob)
-            conf = prob[predict]            
+    if actual_hand_frames > MIN_REQUIRED_FRAMES:
+        input_window = np.array([frame_buffer], dtype=np.float32)
+        input_tensor = torch.tensor(input_window, dtype=torch.float32).to(device)
 
-            if conf > THRESHOLD:
-                top3 = np.argsort(prob)[::-1][:5]
-                for idx in top3:
-                    print(f"{idx_to_word[idx]}: {prob[idx]*100:.1f}%")
-                detected_word = idx_to_word[predict]
+        with torch.no_grad():
+            outputs = model(input_tensor)
+            prob = torch.softmax(outputs, dim=1).cpu().numpy()[0]
+        
+        predict = np.argmax(prob)
+        conf = prob[predict]            
 
-                if not word_sequence_queue or word_sequence_queue[-1] != detected_word:
-                    word_sequence_queue.append(detected_word)
-                    print(f"인식 단어: {detected_word} (확률: {conf*100:.1f}%)")
-                    frame_buffer = deque([[0.0] * feature_dim] * MAX_FRAME, maxlen=MAX_FRAME)
-                    hand_visible_counter = 0
+        if conf > THRESHOLD:
+            top3 = np.argsort(prob)[::-1][:5]
+            for idx in top3:
+                print(f"{idx_to_word[idx]}: {prob[idx]*100:.1f}%")
+            detected_word = idx_to_word[predict]
 
-                    # 새 단어가 추가될 때마다 백그라운드에서 문장 다듬기 호출
-                    if not is_refining:
-                        is_refining = True
-                        refined_sentence = "문장 생성 중..."
-                        t = threading.Thread(target=refine_sentence, args=(list(word_sequence_queue),), daemon=True)
-                        t.start()
+            if not word_sequence_queue or word_sequence_queue[-1] != detected_word:
+                word_sequence_queue.append(detected_word)
+                print(f"인식 단어: {detected_word} (확률: {conf*100:.1f}%)")
+
+                # 새 단어가 추가될 때마다 백그라운드에서 문장 다듬기 호출
+                if not is_refining:
+                    is_refining = True
+                    refined_sentence = "문장 생성 중..."
+                    t = threading.Thread(target=refine_sentence, args=(list(word_sequence_queue),), daemon=True)
+                    t.start()
 
     if word_sequence_queue:
         img_pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
