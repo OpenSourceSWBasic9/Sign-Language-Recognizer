@@ -227,7 +227,7 @@ while cap.isOpened():
                             if rt_sample[f, idx] == 0:
                                 rt_sample[f, idx] = rt_sample[f-1, idx]
 
-                            elif np.abs(rt_sample[f, idx] - rt_sample[f-1, idx]) > 0.15:
+                            elif np.abs(rt_sample[f, idx] - rt_sample[f-1, idx]) > 0.1:
                                 # 직전 프레임의 정상적인 값을 그대로 복사해서 메워버림 (보간 처리)
                                 rt_sample[f, idx] = rt_sample[f-1, idx]
                 break
