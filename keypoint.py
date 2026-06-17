@@ -22,6 +22,7 @@ THRESHOLD = 0.6
 TARGET_SHOULDER_DIST = 0.18
 
 frame_buffer = deque([[0.0] * feature_dim] * MAX_FRAME, maxlen=MAX_FRAME)
+real_hand_buffer = deque([[True, True] for _ in range(60)], maxlen=MAX_FRAME)
 word_sequence_queue = []
 
 hand_visible_counter = 0
@@ -235,15 +236,17 @@ while cap.isOpened():
                 mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=2)
             )
 
+    is_left_hand_real = (left_hand_data != [0.0] * 63)
+    is_right_hand_real = (right_hand_data != [0.0 * 63])
     # 1. 왼손이 검출되지 않았을 때 (모두 0.0일 때)
-    if left_hand_data == [0.0] * 63:
+    if not is_left_hand_real:
         if results_pose.pose_landmarks:
             # 왼쪽 어깨(LEFT_SHOULDER) 좌표를 기준으로 삼음
             ls = results_pose.pose_landmarks.landmark[mp_pose.PoseLandmark.LEFT_SHOULDER]
             
             # 왼쪽 어깨보다 X축으로 살짝 바깥쪽, Y축으로는 허벅지 높이(어깨 아래로 약 +0.4~0.5 정도)
             # 미디어파이프 이미지 좌표계는 아래로 갈수록 Y가 커지므로 +를 해줍니다.
-            virtual_left_x = ls.x + 0.05  # 몸 바깥쪽
+            virtual_left_x = ls.x - 0.05  # 몸 바깥쪽
             virtual_left_y = ls.y + 1.2  # 허벅지/골반 높이
             
             # 왼손의 21개 관절 전체를 이 가상의 차렷 자세 좌표로 채워버림
@@ -253,7 +256,7 @@ while cap.isOpened():
             left_hand_data = temp_virtual
 
     # 2. 오른손이 검출되지 않았을 때 (필요하다면 오른손 수어 안 할 때를 위해 추가)
-    if right_hand_data == [0.0] * 63:
+    if not is_right_hand_real:
         if results_pose.pose_landmarks:
             rs = results_pose.pose_landmarks.landmark[mp_pose.PoseLandmark.RIGHT_SHOULDER]
             virtual_right_x = rs.x + 0.05
@@ -298,8 +301,14 @@ while cap.isOpened():
         frame_keypoints[x_indices] = (frame_keypoints[x_indices] - ref_x)
         frame_keypoints[y_indices] = (frame_keypoints[y_indices] - ref_y)
 
+    left_hand_x_indices = list(range(0, 63, 3))
     right_hand_x_indices = list(range(63, 126, 3))
-    frame_keypoints[right_hand_x_indices] = frame_keypoints[right_hand_x_indices] * -1.0
+
+    if is_left_hand_real:
+        frame_keypoints[left_hand_x_indices] = frame_keypoints[left_hand_x_indices] * -1.0    
+    if is_right_hand_real:
+        frame_keypoints[right_hand_x_indices] = frame_keypoints[right_hand_x_indices] * -1.0
+
 
     cur_shoulder_dist = np.sqrt((extra_features[3] - extra_features[6])**2 + (extra_features[4] - extra_features[7])**2)
     scale_factor = cur_shoulder_dist / TARGET_SHOULDER_DIST
@@ -322,6 +331,7 @@ while cap.isOpened():
         waiting_time = 0.0
         
         frame_buffer.append(frame_keypoints)
+    real_hand_buffer.append([is_left_hand_real, is_right_hand_real])
 
     current_buffer = np.array(frame_buffer, dtype=np.float32)
     hand_detected_per_frame = np.sum(np.abs(current_buffer[:, :126]), axis=1) > 0
@@ -349,17 +359,29 @@ while cap.isOpened():
 
             if actual_hand_frames >= MIN_REQUIRED_FRAMES:
                 input_window = np.array([frame_buffer], dtype=np.float32)
+                real_flags = np.array(real_hand_buffer)
+
                 for f in range(1, len(input_window)):
                     # 이번 프레임에서 순간적으로 손을 놓쳐서 0이 되었거나, 
                     # 직전 프레임과의 차이가 비정상적으로 클 때 (칼날 노이즈 감지)
                     for idx in range(0, 126): # 손 영역 좌표들 스캔
+                        hand_type = 0 if idx < 63 else 1
+                        was_real = real_flags[f-1, hand_type]
+                        is_real = real_flags[f, hand_type]
+
                         if input_window[f-1, idx] != 0:
+
+                            if not was_real and is_real:
+                                rt_sample[f, idx] = rt_sample[f-1, idx] * 0.6 + rt_sample[f, idx] * 0.4
+                                continue
+
                             if input_window[f, idx] == 0:
                                 input_window[f, idx] = input_window[f-1, idx]
 
-                            if np.abs(input_window[f, idx] - input_window[f-1, idx]) > 0.15:
+                            elif np.abs(input_window[f, idx] - input_window[f-1, idx]) > 0.15:
                                 # 직전 프레임의 정상적인 값을 그대로 복사해서 메워버림 (보간 처리)
                                 input_window[f, idx] = input_window[f-1, idx]
+
                 input_tensor = torch.tensor(input_window, dtype=torch.float32).to(device)
 
                 with torch.no_grad():

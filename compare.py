@@ -66,6 +66,7 @@ pose = mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7)
 
 cap = cv2.VideoCapture(0)
 frame_buffer = deque([[0.0] * feature_dim] * MAX_FRAME, maxlen=MAX_FRAME)
+real_hand_buffer = deque([[True, True] for _ in range(60)], maxlen=MAX_FRAME)
 
 print(f"\n카메라 창에서 '{TARGET_WORD}' 수어를 보여주세요.")
 print("스페이스바: 현재 버퍼 캡처 & 비교 / Q: 종료")
@@ -99,16 +100,18 @@ while cap.isOpened():
                 right_hand_data = temp_coords
             mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
 
+    is_left_hand_real = (left_hand_data != [0.0] * 63)
+    is_right_hand_real = (right_hand_data != [0.0 * 63])
+
     # 1. 왼손이 검출되지 않았을 때 (모두 0.0일 때)
-    if left_hand_data == [0.0] * 63:
-        print("왼손 미검출")
+    if not is_left_hand_real:
         if results_pose.pose_landmarks:
             # 왼쪽 어깨(LEFT_SHOULDER) 좌표를 기준으로 삼음
             ls = results_pose.pose_landmarks.landmark[mp_pose.PoseLandmark.LEFT_SHOULDER]
             
-            # 왼쪽 어깨보다 X축으로 살짝 바깥쪽, Y축으로는 허벅지 높이(어깨 아래로 약 +0.4~0.5 정도)
+            # 왼쪽 어깨보다 X축으로 살짝 바깥쪽, Y축으로는 허벅지 높이
             # 미디어파이프 이미지 좌표계는 아래로 갈수록 Y가 커지므로 +를 해줍니다.
-            virtual_left_x = ls.x + 0.05  # 몸 바깥쪽
+            virtual_left_x = ls.x - 0.05  # 몸 바깥쪽
             virtual_left_y = ls.y + 1.2  # 허벅지/골반 높이
             
             # 왼손의 21개 관절 전체를 이 가상의 차렷 자세 좌표로 채워버림
@@ -118,7 +121,7 @@ while cap.isOpened():
             left_hand_data = temp_virtual
 
     # 2. 오른손이 검출되지 않았을 때 (필요하다면 오른손 수어 안 할 때를 위해 추가)
-    if right_hand_data == [0.0] * 63:
+    if not is_right_hand_real:
         if results_pose.pose_landmarks:
             rs = results_pose.pose_landmarks.landmark[mp_pose.PoseLandmark.RIGHT_SHOULDER]
             virtual_right_x = rs.x + 0.05
@@ -147,8 +150,13 @@ while cap.isOpened():
         frame_keypoints[x_indices] = (frame_keypoints[x_indices] - ref_x)
         frame_keypoints[y_indices] = (frame_keypoints[y_indices] - ref_y)
     
+    left_hand_x_indices = list(range(0, 63, 3))
     right_hand_x_indices = list(range(63, 126, 3))
-    frame_keypoints[right_hand_x_indices] = frame_keypoints[right_hand_x_indices] * -1.0
+
+    if is_left_hand_real:
+        frame_keypoints[left_hand_x_indices] = frame_keypoints[left_hand_x_indices] * -1.0    
+    if is_right_hand_real:
+        frame_keypoints[right_hand_x_indices] = frame_keypoints[right_hand_x_indices] * -1.0
 
     target_shoulder_dist = 0.18
     current_shoulder_dist = np.sqrt((ls.x-rs.x)**2+(ls.y-rs.y)**2)
@@ -162,6 +170,7 @@ while cap.isOpened():
         frame_buffer.append(frame_keypoints.tolist())
     else:
         frame_buffer.append([0.0] * feature_dim)
+    real_hand_buffer.append([is_left_hand_real, is_right_hand_real])
 
     current_buffer = np.array(frame_buffer, dtype=np.float32)
     hand_detected_per_frame = np.sum(np.abs(current_buffer[:, :126]), axis=1) > 0
@@ -189,11 +198,31 @@ while cap.isOpened():
 
             if actual_hand_frames >= 20:
                 rt_sample = np.array(frame_buffer, dtype=np.float32)
+                real_flags = np.array(real_hand_buffer)
                 for f in range(1, len(rt_sample)):
                     # 이번 프레임에서 순간적으로 손을 놓쳐서 0이 되었거나, 
                     # 직전 프레임과의 차이가 비정상적으로 클 때 (칼날 노이즈 감지)
                     for idx in range(0, 126): # 손 영역 좌표들 스캔
+                        hand_type = 0 if idx < 63 else 1
+                        was_real = real_flags[f-1, hand_type]
+                        is_real = real_flags[f, hand_type]
+
                         if rt_sample[f-1, idx] != 0:
+
+                            if not was_real and is_real:
+                                # 손이 등장하기 직전 과거의 가상 좌표 시작점 지정 (버퍼 언더플로우 방지)
+                                start_f = max(0, f - 8) 
+                                start_val = rt_sample[start_f, idx] # 과거의 가상 좌표 (예: 0.6)
+                                end_val = rt_sample[f, idx]         # 현재 처음 들어온 실제 좌표 (예: 0.2)
+                                
+                                # np.linspace로 과거 시작점(start_f)부터 현재(f)까지 스무스하게 연결
+                                steps = f - start_f + 1 # 보간할 프레임 총 개수
+                                interpolated_values = np.linspace(start_val, end_val, steps)
+                                
+                                # 과거 가상 좌표 구간(start_f ~ f)을 사선 값으로 덮어씌움!
+                                for i, curr_f in enumerate(range(start_f, f + 1)):
+                                    rt_sample[curr_f, idx] = interpolated_values[i]
+                                continue
 
                             if rt_sample[f, idx] == 0:
                                 rt_sample[f, idx] = rt_sample[f-1, idx]
