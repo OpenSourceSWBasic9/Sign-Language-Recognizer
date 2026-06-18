@@ -19,7 +19,7 @@ export default function App() {
 
     if (isActive) {
       // 1. 브라우저 웹캠 구동
-      navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } })
+      navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 360 } })
         .then((stream) => {
           if (videoRef.current) {
             videoRef.current.srcObject = stream;
@@ -57,7 +57,7 @@ export default function App() {
               ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
               
               // 프레임을 JPEG 문자열로 인코딩하여 백엔드로 전달
-              const base64Frame = canvas.toDataURL('image/jpeg', 0.7);
+              const base64Frame = canvas.toDataURL('image/jpeg', 0.5);
               wsRef.current.send(base64Frame);
             }
           }

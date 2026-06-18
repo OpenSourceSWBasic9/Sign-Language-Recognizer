@@ -92,74 +92,57 @@ def refine_sentence_bg(words, session_state):
             messages=[{
                 "role": "user",
                 "content": f"""
-다음은 한국어 수어 인식 시스템이 순서대로 감지한 단어들이야: [{word_str}]
+You are a simple, strict Korean Sign Language (KSL) translator.
+Convert the given Korean word list into ONE natural sentence.
 
-이 단어들을 자연스러운 한국어 문장 하나로 다듬어 줘.
-입력에 없는 뜻을 새로 만들면 안 돼.
+⚠️ RULES:
+1. Output ONLY the final Korean sentence. No explanation, no quotes.
+2. If input has ONLY ONE word, output that exact word as-is (e.g., ['사과'] -> 사과).
+3. If a verb/adjective comes before a noun, modify it to describe the noun (e.g., '슬프다 고민' -> 슬픈 고민).
+4. Connect words using '~해서' if it's a cause-and-effect action (e.g., 어색해서 싫어합니다).
+5. NEVER use '~가 싫어합니다' or '~이 좋아합니다'. You MUST use '~를 싫어합니다' or '~을 좋아합니다'.
 
-규칙:
-- 출력은 반드시 한 문장만 작성해.
-- 설명, 괄호, 따옴표, 화살표, 해설을 절대 쓰지 마.
-- 반드시 입력된 단어들만 사용해서 문장을 만들어.
-- 입력 단어가 하나 그 단어를 그대로 출력해.
-- 입력 단어들이 자연스럽게 연결될 때만 조사와 어미를 추가해.
-- 입력 단어들 사이의 관계가 불분명하면 억지로 연결하지 말고 단어를 나열형으로 정리해.
-- 입력 단어에 없는 새로운 행동, 감정, 상황을 추가하지 마.
-- 입력 단어 사이 관계가 불명확하면 억지로 연결하지 말고 쉼표로 나열해.
+📝 EXAMPLES:
+Input: [고민] -> Output: 고민
+Input: [어색하다, 싫어하다] -> Output: 어색해서 싫어합니다.
+Input: [운동경기, 싫어하다] -> Output: 운동경기를 싫어합니다.
+Input: [영화, 좋아하다] -> Output: 영화를 좋아합니다.
+Input: [학교, 가다] -> Output: 학교에 갑니다.
 
-예시:
-입력: [안녕하세요]
-출력: 안녕하세요.
-
-입력: [학교 가다]
-출력: 학교에 갑니다.
-
-입력: [나 병원 가다]
-출력: 나는 병원에 갑니다.
-
-입력: [운동경기 소화제]
-출력: 운동경기, 소화제입니다.
-
-입력: [수어 고깃국]
-출력: 수어, 고깃국입니다.
-
-입력: [오늘 날씨 좋다]
-출력: 오늘 날씨가 좋습니다.
-
-입력: [슬프다 고민]
-출력: 슬픈 고민
-
-입력 단어:
+Input Word List:
 [{word_str}]
 
-최종 문장만 출력:
+Output ONLY the final perfect Korean sentence:
 """
             }]
         )
         first_sentence = response.choices[0].message.content.strip()
         print(f"1차 문장: {first_sentence}", flush=True)
 
-        need_review = len(words) <= 2 or len(first_sentence) > max(40, len(word_str) * 3)
+        need_review = len(words) >= 2 or len(first_sentence) > max(40, len(word_str) * 3)
 
         if need_review:
             review_prompt = f"""
-다음은 수어 인식 모델이 예측한 단어 목록과,
-그 단어 목록을 바탕으로 만들어진 한국어 문장이야.
+You are a strict Korean Text Auditor Agent.
+Your job is to inspect the 'Generated Sentence' against the 'Raw Word List' and fix any hallucinations.
 
-단어 목록:
-{word_str}
+Input Data:
+- Raw Word List: {word_str}
+- Generated Sentence: {first_sentence}
 
-생성된 문장:
-{first_sentence}
+⚠️ AUDIT RULES:
+1. Output ONLY the final inspected Korean sentence. No explanations, no quotes.
+2. [CRITICAL] If the 'Generated Sentence' ends with a noun (like '슬픈 고민', '행복한 기억'), do NOT forcefully attach particles like '~을/를' or '~가/이' at the end. Preserve the noun ending as-is.
+3. NEVER delete necessary Korean particles inside a fully constructed sentence (e.g., Change '경기가 싫어합니다' to '경기를 싫어합니다').
+4. ONLY delete a word if it is a completely fabricated subject or object (like '나는', '집에서') that has zero connection to the Raw Word List.
+5. If the Generated Sentence is correct (e.g., '고민을 싫어합니다.', '슬픈 고민'), output it EXACTLY as-is. Do NOT simplify or modify it further.
 
-위 문장은 입력 단어가 부족하거나, 입력 단어에 비해 문장이 길어서 의미가 과하게 확장되었을 수 있어.
-단어 목록의 의미를 기준으로 다시 한 번 짧고 자연스럽게 다듬어 줘.
+📝 AUDIT EXAMPLES:
+- Raw: [슬프다, 고민] | Generated: 슬픈 고민 -> Output: 슬픈 고민
+- Raw: [어색하다, 싫어하다] | Generated: 어색해서 싫어합니다. -> Output: 어색해서 싫어합니다.
+- Raw: [운동경기, 싫어하다] | Generated: 운동경기가 싫어합니다. -> Output: 운동경기를 싫어합니다.
 
-조건:
-- 입력된 단어의 의미를 최대한 유지해.
-- 입력 단어와 크게 관련 없는 내용은 제거해 줘.
-- 문장이 너무 길거나 어색하면 짧고 단순하게 만들어 줘.
-- 설명 없이 문장만 출력해.
+Inspected Output (Korean ONLY):
 """
 
             review_response = client.chat.completions.create(
@@ -372,7 +355,6 @@ async def websocket_endpoint(websocket: WebSocket):
                                 if input_window[f-1, idx] != 0:
 
                                     if not was_real and is_real:
-                                        input_window[f, idx] = input_window[f-1, idx] * 0.6 + input_window[f, idx] * 0.4
                                         continue
 
                                     if input_window[f, idx] == 0:
@@ -386,11 +368,14 @@ async def websocket_endpoint(websocket: WebSocket):
 
                         with torch.no_grad():
                             outputs = model(input_tensor)
+                            
+                            max_logit = torch.max(outputs).item()
+
                             prob = torch.softmax(outputs, dim=1).cpu().numpy()[0]
                             predict = np.argmax(prob)
                             conf = prob[predict]            
 
-                            if conf > THRESHOLD:
+                            if conf > THRESHOLD and max_logit > 2.0:
                                 detected_word = idx_to_word[predict]
                                 if not session_state['word_sequence_queue'] or session_state['word_sequence_queue'][-1] != detected_word:
                                     session_state['word_sequence_queue'].append(detected_word)
@@ -399,14 +384,17 @@ async def websocket_endpoint(websocket: WebSocket):
                                     session_state['current_prediction'] = detected_word
                                     session_state['current_confidence'] = int(conf * 100)
 
-                                    if not session_state['is_refining']:
-                                        session_state['is_refining'] = True
-                                        t = threading.Thread(
-                                            target=refine_sentence_bg, 
-                                            args=(list(session_state['word_sequence_queue']), session_state), 
-                                            daemon=True
-                                        )
-                                        t.start()
+                                    if len(session_state['word_sequence_queue']) <= 1:
+                                        session_state['refined_sentence'] = detected_word
+                                    else:
+                                        if not session_state['is_refining']:
+                                            session_state['is_refining'] = True
+                                            t = threading.Thread(
+                                                target=refine_sentence_bg, 
+                                                args=(list(session_state['word_sequence_queue']), session_state), 
+                                                daemon=True
+                                            )
+                                            t.start()
 
             # 뼈대가 그려진 프레임을 다시 웹용 Base64 문자열로 압축 변환
             _, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])

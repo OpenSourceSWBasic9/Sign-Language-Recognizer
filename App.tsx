@@ -57,7 +57,7 @@ export default function App() {
               wsRef.current.send(base64Frame);
             }
           }
-        }, 100); // 100ms 마다 1프레임 전송 (10 FPS)
+        }, 33); // 100ms 마다 1프레임 전송 (10 FPS)
       };
 
       // 4. 백엔드(Python)가 보낸 실시간 연산 분석 결과 수신
