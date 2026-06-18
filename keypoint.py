@@ -250,7 +250,7 @@ while cap.isOpened():
             )
 
     is_left_hand_real = (left_hand_data != [0.0] * 63)
-    is_right_hand_real = (right_hand_data != [0.0 * 63])
+    is_right_hand_real = (right_hand_data != [0.0] * 63)
     # 1. 왼손이 검출되지 않았을 때 (모두 0.0일 때)
     if not is_left_hand_real:
         if results_pose.pose_landmarks:
@@ -385,7 +385,6 @@ while cap.isOpened():
                         if input_window[f-1, idx] != 0:
 
                             if not was_real and is_real:
-                                rt_sample[f, idx] = rt_sample[f-1, idx] * 0.6 + rt_sample[f, idx] * 0.4
                                 continue
 
                             if input_window[f, idx] == 0:
