@@ -91,15 +91,95 @@ def refine_sentence_bg(words, session_state):
             temperature=0.2,
             messages=[{
                 "role": "user",
-                "content": (
-                    f"다음은 한국어 수어 인식 시스템이 순서대로 감지한 단어들이야: [{word_str}]\n"
-                    "이 단어들을 자연스러운 한국어 문장 하나로 다듬는 역할만 해. 설명 없이 문장만 출력해.\n"
-                )
+                "content": f"""
+다음은 한국어 수어 인식 시스템이 순서대로 감지한 단어들이야: [{word_str}]
+
+이 단어들을 자연스러운 한국어 문장 하나로 다듬어 줘.
+입력에 없는 뜻을 새로 만들면 안 돼.
+
+규칙:
+- 출력은 반드시 한 문장만 작성해.
+- 설명, 괄호, 따옴표, 화살표, 해설을 절대 쓰지 마.
+- 반드시 입력된 단어들만 사용해서 문장을 만들어.
+- 입력 단어가 하나 그 단어를 그대로 출력해.
+- 입력 단어들이 자연스럽게 연결될 때만 조사와 어미를 추가해.
+- 입력 단어들 사이의 관계가 불분명하면 억지로 연결하지 말고 단어를 나열형으로 정리해.
+- 입력 단어에 없는 새로운 행동, 감정, 상황을 추가하지 마.
+- 입력 단어 사이 관계가 불명확하면 억지로 연결하지 말고 쉼표로 나열해.
+
+예시:
+입력: [안녕하세요]
+출력: 안녕하세요.
+
+입력: [학교 가다]
+출력: 학교에 갑니다.
+
+입력: [나 병원 가다]
+출력: 나는 병원에 갑니다.
+
+입력: [운동경기 소화제]
+출력: 운동경기, 소화제입니다.
+
+입력: [수어 고깃국]
+출력: 수어, 고깃국입니다.
+
+입력: [오늘 날씨 좋다]
+출력: 오늘 날씨가 좋습니다.
+
+입력: [슬프다 고민]
+출력: 슬픈 고민
+
+입력 단어:
+[{word_str}]
+
+최종 문장만 출력:
+"""
             }]
         )
         first_sentence = response.choices[0].message.content.strip()
-        session_state['refined_sentence'] = first_sentence
-        print(f"문장 교정 결과: {first_sentence}")
+        print(f"1차 문장: {first_sentence}", flush=True)
+
+        need_review = len(words) <= 2 or len(first_sentence) > max(40, len(word_str) * 3)
+
+        if need_review:
+            review_prompt = f"""
+다음은 수어 인식 모델이 예측한 단어 목록과,
+그 단어 목록을 바탕으로 만들어진 한국어 문장이야.
+
+단어 목록:
+{word_str}
+
+생성된 문장:
+{first_sentence}
+
+위 문장은 입력 단어가 부족하거나, 입력 단어에 비해 문장이 길어서 의미가 과하게 확장되었을 수 있어.
+단어 목록의 의미를 기준으로 다시 한 번 짧고 자연스럽게 다듬어 줘.
+
+조건:
+- 입력된 단어의 의미를 최대한 유지해.
+- 입력 단어와 크게 관련 없는 내용은 제거해 줘.
+- 문장이 너무 길거나 어색하면 짧고 단순하게 만들어 줘.
+- 설명 없이 문장만 출력해.
+"""
+
+            review_response = client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                max_tokens=100,
+                temperature=0.2,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": review_prompt
+                    }
+                ]
+            )
+            session_state['refined_sentence'] = review_response.choices[0].message.content.strip()
+            print(f"문장 교정 결과: {session_state['refined_sentence']}")
+        
+        else:
+            session_state['refined_sentence'] = first_sentence
+            print(f"문장 교정 결과: {session_state['refined_sentence']}")
+
     except Exception as e:
         print(f"API 오류: {e}")
         session_state['refined_sentence'] = " ".join(words)
@@ -173,6 +253,35 @@ async def websocket_endpoint(websocket: WebSocket):
             is_left_hand_real = (left_hand_data != [0.0] * 63)
             is_right_hand_real = (right_hand_data != [0.0] * 63)
 
+            # 1. 왼손이 검출되지 않았을 때 (모두 0.0일 때)
+            if not is_left_hand_real:
+                if results_pose.pose_landmarks:
+                    # 왼쪽 어깨(LEFT_SHOULDER) 좌표를 기준으로 삼음
+                    ls = results_pose.pose_landmarks.landmark[mp_pose.PoseLandmark.LEFT_SHOULDER]
+                    
+                    # 왼쪽 어깨보다 X축으로 살짝 바깥쪽, Y축으로는 허벅지 높이(어깨 아래로 약 +0.4~0.5 정도)
+                    # 미디어파이프 이미지 좌표계는 아래로 갈수록 Y가 커지므로 +를 해줍니다.
+                    virtual_left_x = ls.x - 0.05  # 몸 바깥쪽
+                    virtual_left_y = ls.y + 1.2  # 허벅지/골반 높이
+                    
+                    # 왼손의 21개 관절 전체를 이 가상의 차렷 자세 좌표로 채워버림
+                    temp_virtual = []
+                    for _ in range(21):
+                        temp_virtual.extend([virtual_left_x, virtual_left_y, 1.0])
+                    left_hand_data = temp_virtual
+
+            # 2. 오른손이 검출되지 않았을 때 (필요하다면 오른손 수어 안 할 때를 위해 추가)
+            if not is_right_hand_real:
+                if results_pose.pose_landmarks:
+                    rs = results_pose.pose_landmarks.landmark[mp_pose.PoseLandmark.RIGHT_SHOULDER]
+                    virtual_right_x = rs.x + 0.05
+                    virtual_right_y = rs.y + 1.2
+                    
+                    temp_virtual = []
+                    for _ in range(21):
+                        temp_virtual.extend([virtual_right_x, virtual_right_y, 1.0])
+                    right_hand_data = temp_virtual
+
             # 포즈 추적 및 시각화 원 그리기
             extra_features = []
             if results_pose.pose_landmarks:
@@ -195,6 +304,14 @@ async def websocket_endpoint(websocket: WebSocket):
             if ref_x != 0 and ref_y != 0:
                 frame_keypoints[list(range(0, feature_dim, 3))] -= ref_x
                 frame_keypoints[list(range(1, feature_dim, 3))] -= ref_y
+
+            left_hand_x_indices = list(range(0, 63, 3))
+            right_hand_x_indices = list(range(63, 126, 3))
+
+            if is_left_hand_real:
+                frame_keypoints[left_hand_x_indices] = frame_keypoints[left_hand_x_indices] * -1.0    
+            if is_right_hand_real:
+                frame_keypoints[right_hand_x_indices] = frame_keypoints[right_hand_x_indices] * -1.0
 
             cur_shoulder_dist = np.sqrt((extra_features[3] - extra_features[6])**2 + (extra_features[4] - extra_features[7])**2)
             scale_factor = cur_shoulder_dist / TARGET_SHOULDER_DIST if cur_shoulder_dist != 0 else 1.0
@@ -242,6 +359,29 @@ async def websocket_endpoint(websocket: WebSocket):
 
                     if actual_hand_frames >= MIN_REQUIRED_FRAMES:
                         input_window = np.array([session_state['frame_buffer']], dtype=np.float32)
+                        real_flags = np.array(session_state['real_hand_buffer'])
+
+                        for f in range(1, len(input_window)):
+                            # 이번 프레임에서 순간적으로 손을 놓쳐서 0이 되었거나, 
+                            # 직전 프레임과의 차이가 비정상적으로 클 때 (칼날 노이즈 감지)
+                            for idx in range(0, 126): # 손 영역 좌표들 스캔
+                                hand_type = 0 if idx < 63 else 1
+                                was_real = real_flags[f-1, hand_type]
+                                is_real = real_flags[f, hand_type]
+
+                                if input_window[f-1, idx] != 0:
+
+                                    if not was_real and is_real:
+                                        input_window[f, idx] = input_window[f-1, idx] * 0.6 + input_window[f, idx] * 0.4
+                                        continue
+
+                                    if input_window[f, idx] == 0:
+                                        input_window[f, idx] = input_window[f-1, idx]
+
+                                    elif np.abs(input_window[f, idx] - input_window[f-1, idx]) > 0.1:
+                                        # 직전 프레임의 정상적인 값을 그대로 복사해서 메워버림 (보간 처리)
+                                        input_window[f, idx] = input_window[f-1, idx]
+
                         input_tensor = torch.tensor(input_window, dtype=torch.float32).to(device)
 
                         with torch.no_grad():
